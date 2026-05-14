@@ -1,369 +1,441 @@
 """
-RAG系统主程序
+基于图RAG的智能烹饪助手 - 主程序
+整合传统检索和图RAG检索，实现真正的图数据优势
 """
 
 import os
 import sys
+import time
 import logging
-from pathlib import Path
-from typing import List
+from typing import List, Optional
 
-# 添加模块路径
-sys.path.append(str(Path(__file__).parent))
+# 设置日志
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# 添加当前目录到Python路径
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from dotenv import load_dotenv
-from config import DEFAULT_CONFIG, RAGConfig
+from config import DEFAULT_CONFIG, GraphRAGConfig
 from rag_modules import (
-    DataPreparationModule,
-    IndexConstructionModule,
-    RetrievalOptimizationModule,
+    GraphDataPreparationModule,
+    MilvusIndexConstructionModule, 
     GenerationIntegrationModule
 )
+from rag_modules.hybrid_retrieval import HybridRetrievalModule
+from rag_modules.graph_rag_retrieval import GraphRAGRetrieval
+from rag_modules.intelligent_query_router import IntelligentQueryRouter, QueryAnalysis
 
 # 加载环境变量
 load_dotenv()
 
-# 配置日志
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
-
-class RecipeRAGSystem:
-    """食谱RAG系统主类"""
-
-    def __init__(self, config: RAGConfig = None):
-        """
-        初始化RAG系统
-
-        Args:
-            config: RAG系统配置，默认使用DEFAULT_CONFIG
-        """
+class AdvancedGraphRAGSystem:
+    """
+    图RAG系统
+    
+    核心特性：
+    1. 智能路由：自动选择最适合的检索策略
+    2. 双引擎检索：传统混合检索 + 图RAG检索
+    3. 图结构推理：多跳遍历、子图提取、关系推理
+    4. 查询复杂度分析：深度理解用户意图
+    5. 自适应学习：基于反馈优化系统性能
+    """
+    
+    def __init__(self, config: Optional[GraphRAGConfig] = None):
         self.config = config or DEFAULT_CONFIG
+        
+        # 核心模块
         self.data_module = None
         self.index_module = None
-        self.retrieval_module = None
         self.generation_module = None
-
-        # 检查数据路径
-        if not Path(self.config.data_path).exists():
-            raise FileNotFoundError(f"数据路径不存在: {self.config.data_path}")
-
-        # 检查API密钥
-        if not os.getenv("ANTHROPIC_AUTH_TOKEN"):
-            raise ValueError("请设置 ANTHROPIC_AUTH_TOKEN 环境变量")
-    
+        
+        # 检索引擎
+        self.traditional_retrieval = None
+        self.graph_rag_retrieval = None
+        self.query_router = None
+        
+        # 系统状态
+        self.system_ready = False
+        
     def initialize_system(self):
-        """初始化所有模块"""
-        print("🚀 正在初始化RAG系统...")
-
-        # 1. 初始化数据准备模块
-        print("初始化数据准备模块...")
-        self.data_module = DataPreparationModule(self.config.data_path)
-
-        # 2. 初始化索引构建模块
-        print("初始化索引构建模块...")
-        self.index_module = IndexConstructionModule(
-            model_name=self.config.embedding_model,
-            index_save_path=self.config.index_save_path
-        )
-
-        # 3. 初始化生成集成模块
-        print("🤖 初始化生成集成模块...")
-        self.generation_module = GenerationIntegrationModule(
-            model_name=self.config.llm_model,
-            temperature=self.config.temperature,
-            max_tokens=self.config.max_tokens
-        )
-
-        print("✅ 系统初始化完成！")
+        """初始化高级图RAG系统"""
+        logger.info("启动高级图RAG系统...")
+        
+        try:
+            # 1. 数据准备模块
+            print("初始化数据准备模块...")
+            self.data_module = GraphDataPreparationModule(
+                uri=self.config.neo4j_uri,
+                user=self.config.neo4j_user,
+                password=self.config.neo4j_password,
+                database=self.config.neo4j_database
+            )
+            
+            # 2. 向量索引模块
+            print("初始化Milvus向量索引...")
+            self.index_module = MilvusIndexConstructionModule(
+                host=self.config.milvus_host,
+                port=self.config.milvus_port,
+                collection_name=self.config.milvus_collection_name,
+                dimension=self.config.milvus_dimension,
+                model_name=self.config.embedding_model
+            )
+            
+            # 3. 生成模块
+            print("初始化生成模块...")
+            self.generation_module = GenerationIntegrationModule(
+                model_name=self.config.llm_model,
+                temperature=self.config.temperature,
+                max_tokens=self.config.max_tokens
+            )
+            
+            # 4. 传统混合检索模块
+            print("初始化传统混合检索...")
+            self.traditional_retrieval = HybridRetrievalModule(
+                config=self.config,
+                milvus_module=self.index_module,
+                data_module=self.data_module,
+                llm_client=self.generation_module.client
+            )
+            
+            # 5. 图RAG检索模块
+            print("初始化图RAG检索引擎...")
+            self.graph_rag_retrieval = GraphRAGRetrieval(
+                config=self.config,
+                llm_client=self.generation_module.client
+            )
+            
+            # 6. 智能查询路由器
+            print("初始化智能查询路由器...")
+            self.query_router = IntelligentQueryRouter(
+                traditional_retrieval=self.traditional_retrieval,
+                graph_rag_retrieval=self.graph_rag_retrieval,
+                llm_client=self.generation_module.client,
+                config=self.config
+            )
+            
+            print("✅ 高级图RAG系统初始化完成！")
+            
+        except Exception as e:
+            logger.error(f"系统初始化失败: {e}")
+            raise
     
     def build_knowledge_base(self):
-        """构建知识库"""
-        print("\n正在构建知识库...")
-
-        # 1. 尝试加载已保存的索引
-        vectorstore = self.index_module.load_index()
-
-        if vectorstore is not None:
-            print("✅ 成功加载已保存的向量索引！")
-            # 仍需要加载文档和分块用于检索模块
-            print("加载食谱文档...")
-            self.data_module.load_documents()
-            print("进行文本分块...")
-            chunks = self.data_module.chunk_documents()
-        else:
-            print("未找到已保存的索引，开始构建新索引...")
-
-            # 2. 加载文档
-            print("加载食谱文档...")
-            self.data_module.load_documents()
-
-            # 3. 文本分块
-            print("进行文本分块...")
-            chunks = self.data_module.chunk_documents()
-
-            # 4. 构建向量索引
-            print("构建向量索引...")
-            vectorstore = self.index_module.build_vector_index(chunks)
-
-            # 5. 保存索引
-            print("保存向量索引...")
-            self.index_module.save_index()
-
-        # 6. 初始化检索优化模块
-        print("初始化检索优化...")
-        self.retrieval_module = RetrievalOptimizationModule(vectorstore, chunks)
-
-        # 7. 显示统计信息
-        stats = self.data_module.get_statistics()
-        print(f"\n📊 知识库统计:")
-        print(f"   文档总数: {stats['total_documents']}")
-        print(f"   文本块数: {stats['total_chunks']}")
-        print(f"   菜品分类: {list(stats['categories'].keys())}")
-        print(f"   难度分布: {stats['difficulties']}")
-
-        print("✅ 知识库构建完成！")
-    
-    def ask_question(self, question: str, stream: bool = False):
-        """
-        回答用户问题
-
-        Args:
-            question: 用户问题
-            stream: 是否使用流式输出
-
-        Returns:
-            生成的回答或生成器
-        """
-        if not all([self.retrieval_module, self.generation_module]):
-            raise ValueError("请先构建知识库")
+        """构建知识库（如果需要）"""
+        print("\n检查知识库状态...")
         
-        print(f"\n❓ 用户问题: {question}")
-
-        # 1. 查询路由
-        route_type = self.generation_module.query_router(question)
-        print(f"🎯 查询类型: {route_type}")
-
-        # 2. 智能查询重写（根据路由类型）
-        if route_type == 'list':
-            # 列表查询保持原查询
-            rewritten_query = question
-            print(f"📝 列表查询保持原样: {question}")
-        else:
-            # 详细查询和一般查询使用智能重写
-            print("🤖 智能分析查询...")
-            rewritten_query = self.generation_module.query_rewrite(question)
-        
-        # 3. 检索相关子块（自动应用元数据过滤）
-        print("🔍 检索相关文档...")
-        filters = self._extract_filters_from_query(question)
-        if filters:
-            print(f"应用过滤条件: {filters}")
-            relevant_chunks = self.retrieval_module.metadata_filtered_search(rewritten_query, filters, top_k=self.config.top_k)
-        else:
-            relevant_chunks = self.retrieval_module.hybrid_search(rewritten_query, top_k=self.config.top_k)
-
-        # 显示检索到的子块信息
-        if relevant_chunks:
-            chunk_info = []
-            for chunk in relevant_chunks:
-                dish_name = chunk.metadata.get('dish_name', '未知菜品')
-                # 尝试从内容中提取章节标题
-                content_preview = chunk.page_content[:100].strip()
-                if content_preview.startswith('#'):
-                    # 如果是标题开头，提取标题（仅取第一行）
-                    title_end = content_preview.find('\n') if '\n' in content_preview else len(content_preview)
-                    section_title = content_preview[:title_end].replace('#', '').strip()
-                    chunk_info.append(f"{dish_name}({section_title})")
+        try:
+            # 检查Milvus集合是否存在 存在就少了构建Milvus索引这一步
+            if self.index_module.has_collection():
+                print("✅ 发现已存在的知识库，尝试加载...")
+                if self.index_module.load_collection():
+                    print("知识库加载成功！")
+                    
+                    # 重要：即使从已存在的知识库加载，也需要加载图数据以支持图索引
+                    print("加载图数据以支持图检索...")
+                    self.data_module.load_graph_data()
+                    print("构建菜谱文档...")
+                    self.data_module.build_recipe_documents()
+                    print("进行文档分块...")
+                    chunks = self.data_module.chunk_documents(
+                        chunk_size=self.config.chunk_size,
+                        chunk_overlap=self.config.chunk_overlap
+                    )
+                    
+                    self._initialize_retrievers(chunks)
+                    return
                 else:
-                    chunk_info.append(f"{dish_name}(内容片段)")
-
-            print(f"找到 {len(relevant_chunks)} 个相关文档块: {', '.join(chunk_info)}")
-        else:
-            print(f"找到 {len(relevant_chunks)} 个相关文档块")
-
-        # 4. 检查是否找到相关内容
-        if not relevant_chunks:
-            return "抱歉，没有找到相关的食谱信息。请尝试其他菜品名称或关键词。"
-
-        # 5. 根据路由类型选择回答方式
-        if route_type == 'list':
-            # 列表查询：直接返回菜品名称列表
-            print("📋 生成菜品列表...")
-            relevant_docs = self.data_module.get_parent_documents(relevant_chunks)
-
-            # 显示找到的文档名称
-            doc_names = []
-            for doc in relevant_docs:
-                dish_name = doc.metadata.get('dish_name', '未知菜品')
-                doc_names.append(dish_name)
-
-            if doc_names:
-                print(f"找到文档: {', '.join(doc_names)}")
-
-            return self.generation_module.generate_list_answer(question, relevant_docs)
-        else:
-            # 详细查询：获取完整文档并生成详细回答
-            print("获取完整文档...")
-            relevant_docs = self.data_module.get_parent_documents(relevant_chunks)
-
-            # 显示找到的文档名称
-            doc_names = []
-            for doc in relevant_docs:
-                dish_name = doc.metadata.get('dish_name', '未知菜品')
-                doc_names.append(dish_name)
-
-            if doc_names:
-                print(f"找到文档: {', '.join(doc_names)}")
-            else:
-                print(f"对应 {len(relevant_docs)} 个完整文档")
-
-            print("✍️ 生成详细回答...")
-
-            # 根据路由类型自动选择回答模式
-            if route_type == "detail":
-                # 详细查询使用分步指导模式
-                if stream:
-                    return self.generation_module.generate_step_by_step_answer_stream(question, relevant_docs)
-                else:
-                    return self.generation_module.generate_step_by_step_answer(question, relevant_docs)
-            else:
-                # 一般查询使用基础回答模式
-                if stream:
-                    return self.generation_module.generate_basic_answer_stream(question, relevant_docs)
-                else:
-                    return self.generation_module.generate_basic_answer(question, relevant_docs)
-    
-    def _extract_filters_from_query(self, query: str) -> dict:
-        """
-        从用户问题中提取元数据过滤条件
-        """
-        filters = {}
-        # 分类关键词
-        category_keywords = DataPreparationModule.get_supported_categories()
-        for cat in category_keywords:
-            if cat in query:
-                filters['category'] = cat
-                break
-
-        # 难度关键词
-        difficulty_keywords = DataPreparationModule.get_supported_difficulties()
-        for diff in sorted(difficulty_keywords, key=len, reverse=True):
-            if diff in query:
-                filters['difficulty'] = diff
-                break
-
-        return filters
-    
-    def search_by_category(self, category: str, query: str = "") -> List[str]:
-        """
-        按分类搜索菜品
-        
-        Args:
-            category: 菜品分类
-            query: 可选的额外查询条件
+                    print("❌ 知识库加载失败，开始重建...")
             
-        Returns:
-            菜品名称列表
-        """
-        if not self.retrieval_module:
-            raise ValueError("请先构建知识库")
-        
-        # 使用元数据过滤搜索
-        search_query = query if query else category
-        filters = {"category": category}
-        
-        docs = self.retrieval_module.metadata_filtered_search(search_query, filters, top_k=10)
-        
-        # 提取菜品名称
-        dish_names = []
-        for doc in docs:
-            dish_name = doc.metadata.get('dish_name', '未知菜品')
-            if dish_name not in dish_names:
-                dish_names.append(dish_name)
-        
-        return dish_names
+            print("未找到已存在的集合，开始构建新的知识库...")
+            
+            # 从Neo4j加载图数据到内存的3个list，包括323个菜谱节点，2906个食材节点，2514个烹饪步骤节点
+            print("从Neo4j加载图数据...")
+            self.data_module.load_graph_data()
+            
+            # 构建菜谱文档 将图数据转为结构化文档
+            print("构建菜谱文档...")
+            self.data_module.build_recipe_documents()
+            
+            # 进行文档分块
+            print("进行文档分块...")
+            chunks = self.data_module.chunk_documents(
+                chunk_size=self.config.chunk_size,
+                chunk_overlap=self.config.chunk_overlap
+            )
+            
+            # 构建Milvus向量索引
+            print("构建Milvus向量索引...")
+            if not self.index_module.build_vector_index(chunks):
+                raise Exception("构建向量索引失败")
+            
+            # 初始化检索器
+            self._initialize_retrievers(chunks)
+            
+            # 显示统计信息
+            self._show_knowledge_base_stats()
+            
+            print("✅ 知识库构建完成！")
+            
+        except Exception as e:
+            logger.error(f"知识库构建失败: {e}")
+            raise
     
-    def get_ingredients_list(self, dish_name: str) -> str:
+    def _initialize_retrievers(self, chunks: List = None):
+        """初始化检索器"""
+        print("初始化检索引擎...")
+        
+        # 如果没有chunks，从数据模块获取
+        if chunks is None:
+            chunks = self.data_module.chunks or []
+        
+        # 初始化传统检索器 (初始化BM25检索器和图索引)
+        self.traditional_retrieval.initialize(chunks)
+        
+        # 初始化图RAG检索器
+        self.graph_rag_retrieval.initialize()
+        
+        self.system_ready = True
+        print("✅ 检索引擎初始化完成！")
+    
+    def _show_knowledge_base_stats(self):
+        """显示知识库统计信息"""
+        print(f"\n知识库统计:")
+        
+        # 数据统计
+        stats = self.data_module.get_statistics()
+        print(f"   菜谱数量: {stats.get('total_recipes', 0)}")
+        print(f"   食材数量: {stats.get('total_ingredients', 0)}")
+        print(f"   烹饪步骤: {stats.get('total_cooking_steps', 0)}")
+        print(f"   文档数量: {stats.get('total_documents', 0)}")
+        print(f"   文本块数: {stats.get('total_chunks', 0)}")
+        
+        # Milvus统计
+        milvus_stats = self.index_module.get_collection_stats()
+        print(f"   向量索引: {milvus_stats.get('row_count', 0)} 条记录")
+        
+        # 图RAG统计
+        route_stats = self.query_router.get_route_statistics()
+        print(f"   路由统计: 总查询 {route_stats.get('total_queries', 0)} 次")
+        
+        if stats.get('categories'):
+            categories = list(stats['categories'].keys())[:10]
+            print(f"   🏷️ 主要分类: {', '.join(categories)}")
+    
+    def ask_question_with_routing(self, question: str, stream: bool = False, explain_routing: bool = False):
         """
-        获取指定菜品的食材信息
-
-        Args:
-            dish_name: 菜品名称
-
-        Returns:
-            食材信息
+        智能问答：自动选择最佳检索策略
         """
-        if not all([self.retrieval_module, self.generation_module]):
-            raise ValueError("请先构建知识库")
+        if not self.system_ready:
+            raise ValueError("系统未就绪，请先构建知识库")
+            
+        print(f"\n❓ 用户问题: {question}")
+        
+        # 显示路由决策解释（可选）
+        if explain_routing:
+            explanation = self.query_router.explain_routing_decision(question)
+            print(explanation)
+        
+        start_time = time.time()
+        
+        try:
+            # 1. 智能路由检索
+            print("执行智能查询路由...")
+            relevant_docs, analysis = self.query_router.route_query(question, self.config.top_k)
+            
+            # 2. 显示路由信息
+            strategy_icons = {
+                "hybrid_traditional": "🔍",
+                "graph_rag": "🕸️", 
+                "combined": "🔄"
+            }
+            strategy_icon = strategy_icons.get(analysis.recommended_strategy.value, "❓")
+            print(f"{strategy_icon} 使用策略: {analysis.recommended_strategy.value}")
+            print(f"📊 复杂度: {analysis.query_complexity:.2f}, 关系密集度: {analysis.relationship_intensity:.2f}")
+            
+            # 3. 显示检索结果信息
+            if relevant_docs:
+                doc_info = []
+                for doc in relevant_docs:
+                    recipe_name = doc.metadata.get('recipe_name', '未知内容')
+                    search_type = doc.metadata.get('search_type', doc.metadata.get('route_strategy', 'unknown'))
+                    score = doc.metadata.get('final_score', doc.metadata.get('relevance_score', 0))
+                    doc_info.append(f"{recipe_name}({search_type}, {score:.3f})")
+                
+                print(f"📋 找到 {len(relevant_docs)} 个相关文档: {', '.join(doc_info[:3])}")
+                if len(doc_info) > 3:
+                    print(f"    等 {len(relevant_docs)} 个结果...")
+            else:
+                # 保持返回值签名一致：始终返回 (result, analysis)
+                return "抱歉，没有找到相关的烹饪信息。请尝试其他问题。", analysis
+            
+            # 4. 生成回答
+            print("🎯 智能生成回答...")
+            
+            if stream:
+                try:
+                    for chunk_text in self.generation_module.generate_adaptive_answer_stream(question, relevant_docs):
+                        print(chunk_text, end="", flush=True)
+                    print("\n")
+                    result = "流式输出完成"
+                except Exception as stream_error:
+                    logger.error(f"流式输出过程中出现错误: {stream_error}")
+                    print(f"\n⚠️ 流式输出中断，切换到标准模式...")
+                    # 使用非流式作为后备
+                    result = self.generation_module.generate_adaptive_answer(question, relevant_docs)
+            else:
+                result = self.generation_module.generate_adaptive_answer(question, relevant_docs)
+            
+            # 5. 性能统计
+            end_time = time.time()
+            print(f"\n⏱️ 问答完成，耗时: {end_time - start_time:.2f}秒")
+            
+            return result, analysis
+            
+        except Exception as e:
+            logger.error(f"问答处理失败: {e}")
+            return f"抱歉，处理问题时出现错误：{str(e)}", None
+    
 
-        # 搜索相关文档
-        docs = self.retrieval_module.hybrid_search(dish_name, top_k=3)
+    
 
-        # 生成食材信息
-        answer = self.generation_module.generate_basic_answer(f"{dish_name}需要什么食材？", docs)
-
-        return answer
     
     def run_interactive(self):
         """运行交互式问答"""
-        print("=" * 60)
-        print("🍽️  尝尝咸淡RAG系统 - 交互式问答  🍽️")
-        print("=" * 60)
-        print("💡 解决您的选择困难症，告别'今天吃什么'的世纪难题！")
-        
-        # 初始化系统
-        self.initialize_system()
-        
-        # 构建知识库
-        self.build_knowledge_base()
-        
-        print("\n交互式问答 (输入'退出'结束):")
+        if not self.system_ready:
+            print("❌ 系统未就绪，请先构建知识库")
+            return
+            
+        print("\n欢迎使用尝尝咸淡RAG烹饪助手！")
+        print("可用功能：")
+        print("   - 'stats' : 查看系统统计")
+        print("   - 'rebuild' : 重建知识库")
+        print("   - 'quit' : 退出系统")
+        print("\n" + "="*50)
         
         while True:
             try:
                 user_input = input("\n您的问题: ").strip()
-                if user_input.lower() in ['退出', 'quit', 'exit', '']:
-                    break
                 
-                # 询问是否使用流式输出
-                stream_choice = input("是否使用流式输出? (y/n, 默认y): ").strip().lower()
-                use_stream = stream_choice != 'n'
+                if not user_input:
+                    continue
+                    
+                if user_input.lower() == 'quit':
+                    break
+                elif user_input.lower() == 'stats':
+                    self._show_system_stats()
+                    continue
+                elif user_input.lower() == 'rebuild':
+                    self._rebuild_knowledge_base()
+                    continue
+                
+                # 普通问答 - 使用默认设置
+                use_stream = True  # 默认使用流式输出
+                explain_routing = False  # 默认不显示路由决策
 
                 print("\n回答:")
-                if use_stream:
-                    # 流式输出
-                    for chunk in self.ask_question(user_input, stream=True):
-                        print(chunk, end="", flush=True)
-                    print("\n")
-                else:
-                    # 普通输出
-                    answer = self.ask_question(user_input, stream=False)
-                    print(f"{answer}\n")
+                
+                result, analysis = self.ask_question_with_routing(
+                    user_input, 
+                    stream=use_stream, 
+                    explain_routing=explain_routing
+                )
+                
+                if not use_stream and result:
+                    print(f"{result}\n")
                 
             except KeyboardInterrupt:
                 break
             except Exception as e:
                 print(f"处理问题时出错: {e}")
+                import traceback
+                traceback.print_exc()
         
-        print("\n感谢使用尝尝咸淡RAG系统！")
-
-
+        print("\n👋 感谢使用尝尝咸淡RAG烹饪助手！")
+        self._cleanup()
+    
+    def _show_system_stats(self):
+        """显示系统统计信息"""
+        print("\n系统运行统计")
+        print("=" * 40)
+        
+        # 路由统计
+        route_stats = self.query_router.get_route_statistics()
+        total_queries = route_stats.get('total_queries', 0)
+        
+        if total_queries > 0:
+            print(f"总查询次数: {total_queries}")
+            print(f"传统检索: {route_stats.get('traditional_count', 0)} ({route_stats.get('traditional_ratio', 0):.1%})")
+            print(f"图RAG检索: {route_stats.get('graph_rag_count', 0)} ({route_stats.get('graph_rag_ratio', 0):.1%})")
+            print(f"组合策略: {route_stats.get('combined_count', 0)} ({route_stats.get('combined_ratio', 0):.1%})")
+        else:
+            print("暂无查询记录")
+        
+        # 知识库统计
+        self._show_knowledge_base_stats()
+    
+    def _rebuild_knowledge_base(self):
+        """重建知识库"""
+        print("\n准备重建知识库...")
+        
+        # 确认操作
+        confirm = input("⚠️  这将删除现有的向量数据并重新构建，是否继续？(y/N): ").strip().lower()
+        if confirm != 'y':
+            print("❌ 重建操作已取消")
+            return
+        
+        try:
+            print("删除现有的Milvus集合...")
+            if self.index_module.delete_collection():
+                print("✅ 现有集合已删除")
+            else:
+                print("删除集合时出现问题，继续重建...")
+            
+            # 重新构建知识库
+            print("开始重建知识库...")
+            self.build_knowledge_base()
+            
+            print("✅ 知识库重建完成！")
+            
+        except Exception as e:
+            logger.error(f"重建知识库失败: {e}")
+            print(f"❌ 重建失败: {e}")
+            print("建议：请检查Milvus服务状态后重试")
+    
+    def _cleanup(self):
+        """清理资源"""
+        if self.data_module:
+            self.data_module.close()
+        if self.traditional_retrieval:
+            self.traditional_retrieval.close()
+        if self.graph_rag_retrieval:
+            self.graph_rag_retrieval.close()
+        if self.index_module:
+            self.index_module.close()
 
 def main():
     """主函数"""
     try:
-        # 创建RAG系统
-        rag_system = RecipeRAGSystem()
+        print("启动高级图RAG系统...")
+        
+        # 创建高级图RAG系统
+        rag_system = AdvancedGraphRAGSystem()
+        
+        # 初始化系统
+        rag_system.initialize_system()
+        
+        # 构建知识库
+        rag_system.build_knowledge_base()
         
         # 运行交互式问答
         rag_system.run_interactive()
         
     except Exception as e:
-        logger.error(f"系统运行出错: {e}")
-        print(f"系统错误: {e}")
+        logger.error(f"系统运行失败: {e}")
+        import traceback
+        traceback.print_exc()
+        print(f"\n❌ 系统错误: {e}")
 
 if __name__ == "__main__":
-    main()
+    main() 

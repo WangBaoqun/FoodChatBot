@@ -1,13 +1,15 @@
-from .data_preparation import DataPreparationModule
-from .index_construction import IndexConstructionModule
-from .retrieval_optimization import RetrievalOptimizationModule
+"""
+基于图数据库的RAG模块包
+"""
+
+from .graph_data_preparation import GraphDataPreparationModule
+from .milvus_index_construction import MilvusIndexConstructionModule
+from .hybrid_retrieval import HybridRetrievalModule
 from .generation_integration import GenerationIntegrationModule
 
 __all__ = [
-    'DataPreparationModule',
-    'IndexConstructionModule', 
-    'RetrievalOptimizationModule',
+    'GraphDataPreparationModule',
+    'MilvusIndexConstructionModule', 
+    'HybridRetrievalModule',
     'GenerationIntegrationModule'
-]
-
-__version__ = "1.0.0"
+] 
