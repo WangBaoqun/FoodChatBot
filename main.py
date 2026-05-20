@@ -20,8 +20,9 @@ from dotenv import load_dotenv
 from config import DEFAULT_CONFIG, GraphRAGConfig
 from rag_modules import (
     GraphDataPreparationModule,
-    MilvusIndexConstructionModule, 
-    GenerationIntegrationModule
+    MilvusIndexConstructionModule,
+    GenerationIntegrationModule,
+    AgenticQueryRouter
 )
 from rag_modules.hybrid_retrieval import HybridRetrievalModule
 from rag_modules.graph_rag_retrieval import GraphRAGRetrieval
@@ -54,7 +55,8 @@ class AdvancedGraphRAGSystem:
         self.traditional_retrieval = None
         self.graph_rag_retrieval = None
         self.query_router = None
-        
+        self.agentic_router = None  # Agentic RAG路由器
+
         # 系统状态
         self.system_ready = False
         
@@ -114,7 +116,17 @@ class AdvancedGraphRAGSystem:
                 llm_client=self.generation_module.client,
                 config=self.config
             )
-            
+
+            # 7. Agentic RAG路由器
+            print("初始化Agentic RAG路由器...")
+            self.agentic_router = AgenticQueryRouter(
+                traditional_retrieval=self.traditional_retrieval,
+                graph_rag_retrieval=self.graph_rag_retrieval,
+                intelligent_router=self.query_router,
+                llm_client=self.generation_module.client,
+                config=self.config
+            )
+
             print("✅ 高级图RAG系统初始化完成！")
             
         except Exception as e:
@@ -292,6 +304,79 @@ class AdvancedGraphRAGSystem:
             print(f"\n⏱️ 问答完成，耗时: {end_time - start_time:.2f}秒")
             
             return result, analysis
+
+        except Exception as e:
+            logger.error(f"问答处理失败: {e}")
+            return f"抱歉，处理问题时出现错误：{str(e)}", None
+
+    def ask_question_agentic(self, question: str, stream: bool = False, explain_process: bool = False):
+        """
+        Agentic问答：使用主动探索式检索，带反思循环
+        """
+        if not self.system_ready:
+            raise ValueError("系统未就绪，请先构建知识库")
+
+        print(f"\n❓ 用户问题: {question}")
+        print("🤖 使用Agentic检索模式 (主动探索)")
+
+        start_time = time.time()
+
+        try:
+            # 1. 执行Agentic检索
+            print("执行主动探索式检索...")
+            relevant_docs, trace = self.agentic_router.agentic_search(
+                query=question,
+                top_k=self.config.top_k
+            )
+
+            # 2. 显示Agentic过程信息
+            print(f"🔄 迭代次数: {trace.iterations}, 最终质量: {trace.final_quality:.2f}")
+            if len(trace.query_evolution) > 1:
+                print(f"📝 查询演变: {trace.query_evolution[-1]}")
+
+            # 显示详细过程（可选）
+            if explain_process:
+                explanation = self.agentic_router.explain_agentic_process(trace)
+                print(explanation)
+
+            # 3. 显示检索结果信息
+            if relevant_docs:
+                doc_info = []
+                for doc in relevant_docs[:5]:
+                    recipe_name = doc.metadata.get('recipe_name', '未知内容')
+                    search_type = doc.metadata.get('search_type', doc.metadata.get('search_method', 'unknown'))
+                    score = doc.metadata.get('final_score', doc.metadata.get('relevance_score', 0))
+                    doc_info.append(f"{recipe_name}({search_type}, {score:.3f})")
+
+                print(f"📋 找到 {len(relevant_docs)} 个相关文档: {', '.join(doc_info[:3])}")
+            else:
+                return "抱歉，经过多轮探索仍未找到相关的烹饪信息。请尝试更具体的问题。", trace
+
+            # 4. 生成回答
+            print("🎯 智能生成回答...")
+
+            if stream:
+                try:
+                    for chunk_text in self.generation_module.generate_adaptive_answer_stream(question, relevant_docs):
+                        print(chunk_text, end="", flush=True)
+                    print("\n")
+                    result = "流式输出完成"
+                except Exception as stream_error:
+                    logger.error(f"流式输出过程中出现错误: {stream_error}")
+                    print(f"\n⚠️ 流式输出中断，切换到标准模式...")
+                    result = self.generation_module.generate_adaptive_answer(question, relevant_docs)
+            else:
+                result = self.generation_module.generate_adaptive_answer(question, relevant_docs)
+
+            # 5. 性能统计
+            end_time = time.time()
+            print(f"\n⏱️ Agentic问答完成，耗时: {end_time - start_time:.2f}秒")
+
+            return result, trace
+
+        except Exception as e:
+            logger.error(f"Agentic问答处理失败: {e}")
+            return f"抱歉，处理问题时出现错误：{str(e)}", None
             
         except Exception as e:
             logger.error(f"问答处理失败: {e}")
@@ -306,64 +391,87 @@ class AdvancedGraphRAGSystem:
         if not self.system_ready:
             print("❌ 系统未就绪，请先构建知识库")
             return
-            
+
         print("\n欢迎使用尝尝咸淡RAG烹饪助手！")
         print("可用功能：")
         print("   - 'stats' : 查看系统统计")
+        print("   - 'agentic' : 切换到Agentic模式（主动探索）")
+        print("   - 'normal' : 切换到普通模式")
         print("   - 'rebuild' : 重建知识库")
         print("   - 'quit' : 退出系统")
         print("\n" + "="*50)
-        
+
+        # 默认使用普通模式
+        use_agentic = False
+
         while True:
             try:
                 user_input = input("\n您的问题: ").strip()
-                
+
                 if not user_input:
                     continue
-                    
+
                 if user_input.lower() == 'quit':
                     break
                 elif user_input.lower() == 'stats':
                     self._show_system_stats()
                     continue
+                elif user_input.lower() == 'agentic':
+                    use_agentic = True
+                    print("✅ 已切换到Agentic模式（主动探索式检索）")
+                    print("   系统将自动反思并迭代改进检索结果")
+                    continue
+                elif user_input.lower() == 'normal':
+                    use_agentic = False
+                    print("✅ 已切换到普通模式")
+                    continue
                 elif user_input.lower() == 'rebuild':
                     self._rebuild_knowledge_base()
                     continue
-                
-                # 普通问答 - 使用默认设置
-                use_stream = True  # 默认使用流式输出
-                explain_routing = False  # 默认不显示路由决策
 
+                # 根据模式选择检索方式
                 print("\n回答:")
-                
-                result, analysis = self.ask_question_with_routing(
-                    user_input, 
-                    stream=use_stream, 
-                    explain_routing=explain_routing
-                )
-                
-                if not use_stream and result:
-                    print(f"{result}\n")
-                
+
+                if use_agentic:
+                    # Agentic模式
+                    result, trace = self.ask_question_agentic(
+                        user_input,
+                        stream=True,
+                        explain_process=False
+                    )
+                else:
+                    # 普通模式
+                    use_stream = True
+                    explain_routing = False
+
+                    result, analysis = self.ask_question_with_routing(
+                        user_input,
+                        stream=use_stream,
+                        explain_routing=explain_routing
+                    )
+
+                    if not use_stream and result:
+                        print(f"{result}\n")
+
             except KeyboardInterrupt:
                 break
             except Exception as e:
                 print(f"处理问题时出错: {e}")
                 import traceback
                 traceback.print_exc()
-        
-        print("\n👋 感谢使用尝尝咸淡RAG烹饪助手！")
+
+        print("\n👋 恋谢使用尝尝咸淡RAG烹饪助手！")
         self._cleanup()
     
     def _show_system_stats(self):
         """显示系统统计信息"""
         print("\n系统运行统计")
         print("=" * 40)
-        
+
         # 路由统计
         route_stats = self.query_router.get_route_statistics()
         total_queries = route_stats.get('total_queries', 0)
-        
+
         if total_queries > 0:
             print(f"总查询次数: {total_queries}")
             print(f"传统检索: {route_stats.get('traditional_count', 0)} ({route_stats.get('traditional_ratio', 0):.1%})")
@@ -371,7 +479,17 @@ class AdvancedGraphRAGSystem:
             print(f"组合策略: {route_stats.get('combined_count', 0)} ({route_stats.get('combined_ratio', 0):.1%})")
         else:
             print("暂无查询记录")
-        
+
+        # Agentic统计
+        if self.agentic_router:
+            agentic_stats = self.agentic_router.get_agentic_statistics()
+            if agentic_stats.get("total_agentic_queries", 0) > 0:
+                print(f"\nAgentic检索统计:")
+                print(f"   Agentic查询次数: {agentic_stats.get('total_agentic_queries', 0)}")
+                print(f"   平均迭代次数: {agentic_stats.get('avg_iterations', 0):.1f}")
+                print(f"   平均最终质量: {agentic_stats.get('avg_final_quality', 0):.2f}")
+                print(f"   成功达标率: {agentic_stats.get('successful_rate', 0):.1%}")
+
         # 知识库统计
         self._show_knowledge_base_stats()
     

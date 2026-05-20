@@ -37,6 +37,10 @@ class GraphRAGConfig:
     chunk_overlap: int = 50
     max_graph_depth: int = 2  # 图遍历最大深度
 
+    # Agentic RAG配置
+    agentic_max_iterations: int = 3  # Agentic检索最大迭代次数
+    agentic_quality_threshold: float = 0.7  # Agentic检索质量阈值
+
     def __post_init__(self):
         """初始化后的处理"""
         # LightRAG使用Round-robin策略，无需权重验证
@@ -66,7 +70,9 @@ class GraphRAGConfig:
             'max_tokens': self.max_tokens,
             'chunk_size': self.chunk_size,
             'chunk_overlap': self.chunk_overlap,
-            'max_graph_depth': self.max_graph_depth
+            'max_graph_depth': self.max_graph_depth,
+            'agentic_max_iterations': self.agentic_max_iterations,
+            'agentic_quality_threshold': self.agentic_quality_threshold
         }
 
 # 默认配置实例

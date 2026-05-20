@@ -6,10 +6,12 @@ from .graph_data_preparation import GraphDataPreparationModule
 from .milvus_index_construction import MilvusIndexConstructionModule
 from .hybrid_retrieval import HybridRetrievalModule
 from .generation_integration import GenerationIntegrationModule
+from .agentic_router import AgenticQueryRouter
 
 __all__ = [
     'GraphDataPreparationModule',
-    'MilvusIndexConstructionModule', 
+    'MilvusIndexConstructionModule',
     'HybridRetrievalModule',
-    'GenerationIntegrationModule'
+    'GenerationIntegrationModule',
+    'AgenticQueryRouter'
 ] 
